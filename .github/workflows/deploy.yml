@@ -1,0 +1,52 @@
+name: Deploy to S3 + CloudFront on prod
+
+on:
+  push:
+    branches: ["main"]
+
+permissions:
+  id-token: write   # OIDC token for AWS
+  contents: read
+
+env:
+  AWS_REGION: eu-west-1
+  S3_BUCKET: aec-website-test
+  CF_DISTRIBUTION_ID: EMP0A7952QAWS   # your CloudFront distribution id
+  BUILD_DIR: dist
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Remove Node steps if you don't build
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - run: npm run build
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam:::role/GitHubDeployRole
+          aws-region: eu-west-1
+
+      - name: Sync to S3
+        run: aws s3 sync "/" "s3://aec-website-test/" --delete
+
+      - name: (Optional) Cache headers
+        run: |
+          aws s3 cp "s3://aec-website-test/index.html" "s3://aec-website-test/index.html" \
+            --metadata-directive REPLACE --cache-control "no-cache"
+          if aws s3 ls "s3://aec-website-test/assets/" >/dev/null 2>&1; then
+            aws s3 cp "s3://aec-website-test/assets/" "s3://aec-website-test/assets/" \
+              --recursive --metadata-directive REPLACE \
+              --cache-control "public,max-age=31536000,immutable"
+          fi
+
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "EMP0A7952QAWS" \
+            --paths "/*"
